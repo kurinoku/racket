@@ -10,8 +10,7 @@
                          "stx.rkt" "stxcase-scheme.rkt" "qq-and-or.rkt" "cond.rkt"
                          "define-et-al.rkt"
                          "stxloc.rkt" "qqstx.rkt"
-                         "struct-info.rkt"
-                         "struct-util.rkt"))
+                         "struct-info.rkt"))
 
   (#%provide define-struct*
              define-struct/derived
@@ -593,15 +592,19 @@
                              0
                              fld-size))
                    
-                   (define-values (sets field-to-mutator-directives)
-                     (let loop ([fields fields])
+                   (define-values (sets field-to-mutator-directives sets-auto-count)
+                     (let loop ([fields fields]
+                                [count 0])
                        (cond
-                         [(null? fields) (values null null)]
+                         [(null? fields) (values null null count)]
                          [(not (or mutable? (field-mutable? (car fields))))
-                          (loop (cdr fields))]
+                          (loop (cdr fields) count)]
                          [else
-                          (define-values (other-sets other-directives)
-                            (loop (cdr fields)))
+                          (define count* (if (field-auto? (car fields))
+                                             (+ count 1)
+                                             count))
+                          (define-values (other-sets other-directives count**)
+                            (loop (cdr fields) count*))
                           (define this-set
                             (build-name id ; (field-id (car fields))
                                         "set-"
@@ -613,7 +616,8 @@
                                   (cons (field-to-selector/mutator-directive (car fields)
                                                                              this-set
                                                                              #f)
-                                        other-directives))])))
+                                        other-directives)
+                                  count**)])))
                    
                    (define all-directives
                      (append 
@@ -746,7 +750,7 @@
                                                                           (map protect (car super-autos))
                                                                           null))
                                                              (list #,@(map protect
-                                                                           (list-tail sets (max 0 (- (length sets) auto-count))))
+                                                                           (list-tail sets (max 0 (- (length sets) sets-auto-count))))
                                                                    #,@(if super-autos
                                                                           (map protect (cadr super-autos))
                                                                           null))))
@@ -900,6 +904,16 @@
       [(null? xs) xs]
       [else (cons (car xs) (take (cdr xs) (sub1 n)))]))
 
+  ;; modified from racket/collects/racket/contract/private/provide.rkt
+  (define-for-syntax (predicate->struct-name orig-stx stx)
+    (cond
+      [(regexp-match #rx"^(.*)[?]$" (format "~a" (syntax-e stx))) => cadr]
+      [else
+       (raise-syntax-error
+        #f
+        "unable to cope with a struct type whose predicate doesn't end with `?'"
+        orig-stx)]))
+
   (define-for-syntax (find-accessor/no-field-info the-struct-info fld stx)
     (define accessors (list-ref the-struct-info 3))
     (define parent (list-ref the-struct-info 5))
@@ -911,7 +925,7 @@
           0))
     (define num-own-fields (- num-fields num-super-fields))
     (define own-accessors (take accessors num-own-fields))
-    (define struct-name (predicate->struct-name #f stx (list-ref the-struct-info 2)))
+    (define struct-name (predicate->struct-name stx (list-ref the-struct-info 2)))
     (define accessor-name (string->symbol (format "~a-~a" struct-name (syntax-e fld))))
     (or (findf (λ (a) (eq? accessor-name (syntax-e a))) own-accessors)
         (raise-syntax-error
